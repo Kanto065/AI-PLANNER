@@ -10,6 +10,11 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# Build-time only placeholders: `prisma generate` and `next build` just need
+# these env vars to be *present* (module evaluation), not valid/reachable -
+# the real values are injected by docker-compose at container runtime.
+ENV DATABASE_URL="postgresql://build:build@localhost:5432/build"
+ENV AUTH_SECRET="build-time-placeholder-not-used-at-runtime"
 RUN npx prisma generate
 RUN npm run build
 
