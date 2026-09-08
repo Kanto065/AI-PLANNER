@@ -96,7 +96,7 @@ export default async function GoalsPage({
         {goalsView.length > 0 ? (
           <div className="flex flex-col gap-2.5">
             {goalsView.map((g) => (
-              <Link key={g.id} href={`/goals?goal=${g.id}`}>
+              <Link key={g.id} href={`/goals?goal=${g.id}`} style={{ color: "inherit", textDecoration: "none" }}>
                 <Blueprint className="p-4" style={{ background: "var(--color-bg)", cursor: "pointer" }}>
                   <div className="mb-2 flex items-start justify-between gap-2.5">
                     <div>

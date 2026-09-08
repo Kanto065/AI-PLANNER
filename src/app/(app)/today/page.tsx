@@ -128,7 +128,7 @@ export default async function TodayPage({
               <span className="text-muted" style={{ fontSize: 13 }}>No active goals yet.</span>
             ) : (
               activeGoals.map((g) => (
-                <Link key={g.id} href={`/goals?goal=${g.id}`} className="flex items-center justify-between gap-2">
+                <Link key={g.id} href={`/goals?goal=${g.id}`} className="flex items-center justify-between gap-2" style={{ color: "inherit", textDecoration: "none" }}>
                   <span style={{ fontSize: 13 }}>{g.title}</span>
                   <span className="text-muted" style={{ fontSize: 12 }}>{Math.round(g.progressPercent)}%</span>
                 </Link>
