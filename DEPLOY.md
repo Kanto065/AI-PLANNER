@@ -49,17 +49,27 @@ reverse-proxy to it.
 
 ## Subsequent deploys
 
-Merging to the `deploy` branch is the deploy trigger (manually run for now -
-no CI runner is set up on this VPS):
+Pushing to (or merging a PR into) the `deploy` branch on GitHub triggers
+`.github/workflows/deploy.yml`, which pushes the checked-out commit
+straight to `/opt/kanto-planner` on the VPS over SSH. A `post-receive` git
+hook there then runs `docker compose up -d --build` and re-seeds the admin
+user (idempotent). Nothing on the VPS needs to poll or pull.
+
+The deploy key GitHub uses (`VPS_SSH_KEY` secret) is restricted server-side
+(via `command=` in `authorized_keys`) to only run `git-receive-pack` for
+this one repo path - it cannot open a shell or run anything else on the
+VPS, even though the account is root.
+
+To deploy manually instead (e.g. no internet/GitHub access), push directly
+from a machine that already has a `vps` git remote configured:
 
 ```bash
-cd /opt/kanto-planner
-git pull origin deploy
-docker compose up -d --build
+git push vps deploy:deploy
 ```
 
-Prisma migrations run automatically on container start. Step 4 (Caddyfile)
-only needs to happen once, unless the domain or container name changes.
+Prisma migrations run automatically on container start. The Caddyfile step
+above only needs to happen once, unless the domain or container name
+changes.
 
 ## Rollback
 

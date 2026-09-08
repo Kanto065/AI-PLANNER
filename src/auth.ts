@@ -11,6 +11,10 @@ const googleEnabled = Boolean(
 );
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+  // Required behind a reverse proxy (Caddy): Auth.js otherwise rejects the
+  // forwarded Host header as untrusted. Caddy/docker-compose here always
+  // sit between the internet and this container, so this is safe.
+  trustHost: true,
   session: { strategy: "jwt" },
   pages: {
     signIn: "/login",

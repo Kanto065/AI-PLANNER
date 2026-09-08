@@ -1,0 +1,35 @@
+name: Deploy to VPS
+
+# Pushing to (or merging into) `deploy` is the deploy trigger. The runner
+# just git-pushes the checked-out commit straight to the VPS over SSH; a
+# post-receive hook there (see /opt/kanto-planner/.git/hooks/post-receive)
+# does `docker compose up -d --build` + `prisma db seed`.
+#
+# The deploy key used here (VPS_SSH_KEY) is restricted server-side to only
+# run `git-receive-pack /opt/kanto-planner` - it cannot open a shell or run
+# any other command on the VPS, even though the account is root.
+on:
+  push:
+    branches: [deploy]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/vps_deploy
+          chmod 600 ~/.ssh/vps_deploy
+          printf '%s\n' "${{ secrets.VPS_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Push to VPS (triggers build + seed via post-receive hook)
+        run: |
+          git push "ssh://root@${{ secrets.VPS_HOST }}/opt/kanto-planner" HEAD:deploy
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/vps_deploy -o UserKnownHostsFile=~/.ssh/known_hosts
