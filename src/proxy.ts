@@ -3,13 +3,13 @@ import { auth } from "@/auth";
 
 export default auth((req) => {
   const isLoggedIn = Boolean(req.auth);
-  const isLoginPage = req.nextUrl.pathname.startsWith("/login");
+  const isPublicPage = req.nextUrl.pathname.startsWith("/login") || req.nextUrl.pathname.startsWith("/signup");
 
-  if (!isLoggedIn && !isLoginPage) {
+  if (!isLoggedIn && !isPublicPage) {
     return NextResponse.redirect(new URL("/login", req.nextUrl));
   }
-  if (isLoggedIn && isLoginPage) {
-    return NextResponse.redirect(new URL("/dashboard", req.nextUrl));
+  if (isLoggedIn && isPublicPage) {
+    return NextResponse.redirect(new URL("/today", req.nextUrl));
   }
 });
 

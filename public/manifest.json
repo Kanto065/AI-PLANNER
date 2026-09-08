@@ -1,11 +1,11 @@
 {
-  "name": "Kanto Planner",
-  "short_name": "Planner",
+  "name": "AI Planner",
+  "short_name": "AI Planner",
   "description": "Personal daily planner and goal-tracking app",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0b0d10",
-  "theme_color": "#0b0d10",
+  "background_color": "#f2f2f3",
+  "theme_color": "#f2f2f3",
   "icons": [
     {
       "src": "/icon.svg",

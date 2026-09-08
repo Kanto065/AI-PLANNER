@@ -4,16 +4,24 @@ import Google from "next-auth/providers/google";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 
-// Google sign-in is optional and only turned on once you set these env vars
-// (see .env.example). Until then only the credentials login is active.
 const googleEnabled = Boolean(
   process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET,
 );
 
+/** Derives a unique username from an email/name for accounts created via
+ * Google sign-in (which has no username of its own). */
+async function uniqueUsernameFor(seed: string) {
+  const base = seed.split("@")[0].replace(/[^a-zA-Z0-9_]/g, "").toLowerCase() || "user";
+  let candidate = base;
+  let n = 1;
+  while (await prisma.user.findUnique({ where: { username: candidate } })) {
+    candidate = `${base}${n}`;
+    n++;
+  }
+  return candidate;
+}
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  // Required behind a reverse proxy (Caddy): Auth.js otherwise rejects the
-  // forwarded Host header as untrusted. Caddy/docker-compose here always
-  // sit between the internet and this container, so this is safe.
   trustHost: true,
   session: { strategy: "jwt" },
   pages: {
@@ -36,7 +44,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             OR: [{ email: identifier }, { username: identifier }],
           },
         });
-        if (!user) return null;
+        if (!user || !user.passwordHash) return null;
 
         const valid = await bcrypt.compare(password, user.passwordHash);
         if (!valid) return null;
@@ -54,6 +62,25 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       : []),
   ],
   callbacks: {
+    async signIn({ user, account }) {
+      // Credentials already resolved to a real User row in `authorize`.
+      if (account?.provider !== "google") return true;
+      if (!user.email) return false;
+
+      const existing = await prisma.user.findUnique({ where: { email: user.email } });
+      if (existing) {
+        user.id = existing.id;
+        return true;
+      }
+
+      const username = await uniqueUsernameFor(user.email);
+      const created = await prisma.user.create({
+        data: { email: user.email, username, name: user.name ?? username, passwordHash: null },
+      });
+      await prisma.userStats.create({ data: { userId: created.id } });
+      user.id = created.id;
+      return true;
+    },
     async jwt({ token, user }) {
       if (user?.id) token.userId = user.id;
       return token;

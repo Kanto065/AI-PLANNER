@@ -44,7 +44,8 @@ model User {
   id           String   @id @default(cuid())
   email        String   @unique
   username     String   @unique
-  passwordHash String
+  // Nullable: accounts created via Google sign-in have no password.
+  passwordHash String?
   name         String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -194,6 +195,10 @@ model ConversationSummary {
   summary  String
   actions  Json
   model    String
+  // Full per-message transcript (role/text/proposal state), for replaying
+  // a past session message-by-message. Additive field - rawInput/summary
+  // stay populated too (a plaintext export + short synopsis).
+  messages Json?
 
   createdAt DateTime @default(now())
 
