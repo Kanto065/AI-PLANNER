@@ -1,0 +1,12 @@
+# Append this block to the EXISTING shared Caddy's config on the VPS
+# (/opt/platform/deploy/caddy/Caddyfile), then reload it with:
+#   docker exec platform-caddy-1 caddy reload --config /etc/caddy/Caddyfile
+#
+# Do not replace or reorder the other site blocks already in that file.
+# Requires the "web" container (docker-compose.yml) to be joined to the
+# same docker network as platform-caddy-1 (see PROXY_NETWORK in .env).
+
+kanto-planner.duckdns.org {
+	encode gzip
+	reverse_proxy kanto-web:3000
+}

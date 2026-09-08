@@ -1,0 +1,9 @@
+# Defaults to "localhost" for local dev (Caddy auto-generates a locally
+# trusted self-signed cert for that). On the VPS, set SITE_ADDRESS in .env
+# to kanto-planner.duckdns.org and Caddy will obtain a real Let's Encrypt
+# certificate automatically, as long as ports 80/443 are reachable.
+{$SITE_ADDRESS:localhost} {
+	encode gzip
+
+	reverse_proxy web:3000
+}

@@ -1,0 +1,201 @@
+// Prisma schema for the personal daily planner / goal tracker.
+// Single-user, self-hosted Postgres.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Connection URL now lives in prisma.config.ts (Prisma 7 driver-adapter
+// setup) - schema.prisma only declares the provider.
+datasource db {
+  provider = "postgresql"
+}
+
+enum GoalStatus {
+  ACTIVE
+  PAUSED
+  DROPPED
+  COMPLETED
+}
+
+// Snapshot classification stored on Goal for cheap filtering/display.
+// The *reasoning* behind the current value lives in GoalFeasibilityLog.
+enum FeasibilityStatus {
+  UNKNOWN // not enough data yet (no time logged / just created)
+  ON_TRACK
+  AT_RISK
+  UNREALISTIC
+}
+
+enum FeasibilitySource {
+  SYSTEM // recalculated automatically from progress/time-log pace
+  USER_OVERRIDE // you manually corrected it
+  TRIAGE // set during a conversational triage session
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  SKIPPED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  username     String   @unique
+  passwordHash String
+  name         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  goals                 Goal[]
+  tasks                 Task[]
+  timeLogs              TimeLog[]
+  stats                 UserStats?
+  conversationSummaries ConversationSummary[]
+}
+
+model Goal {
+  id          String     @id @default(cuid())
+  userId      String
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  category    String?
+
+  // Effort + timeline inputs used by the feasibility calculation.
+  estimatedHours  Float?
+  deadline        DateTime?
+  progressPercent Float      @default(0)
+  status          GoalStatus @default(ACTIVE)
+
+  // Current feasibility snapshot (recalculated from TimeLog pace vs.
+  // estimatedHours/deadline). `feasibilityReason` is a human-readable
+  // explanation, not just a number, per the "tell me honestly what's
+  // not feasible, and why" requirement.
+  feasibilityScore        Float?
+  feasibilityStatus       FeasibilityStatus @default(UNKNOWN)
+  feasibilityReason       String?
+  feasibilityUpdatedAt    DateTime?
+  feasibilityOverride     Boolean           @default(false)
+  feasibilityOverrideNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tasks           Task[]
+  feasibilityLogs GoalFeasibilityLog[]
+
+  @@index([userId])
+  @@index([userId, status])
+}
+
+// Append-only history of every feasibility recalculation and every manual
+// override/triage feedback, so the "why did this change" trail is never lost.
+model GoalFeasibilityLog {
+  id     String @id @default(cuid())
+  goalId String
+  goal   Goal   @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  score  Float?
+  status FeasibilityStatus
+  reason String
+  source FeasibilitySource @default(SYSTEM)
+
+  createdAt DateTime @default(now())
+
+  @@index([goalId, createdAt])
+}
+
+model Task {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Null goalId = standalone/routine task, not tied to any goal.
+  goalId String?
+  goal   Goal?   @relation(fields: [goalId], references: [id], onDelete: SetNull)
+
+  title       String
+  description String?
+
+  scheduledDate    DateTime
+  scheduledStart   DateTime?
+  scheduledEnd     DateTime?
+  estimatedMinutes Int?
+
+  status TaskStatus @default(PENDING)
+  // 1-5, feeds weighted XP calculation.
+  difficulty Int @default(1)
+
+  isRoutine Boolean @default(false)
+  // e.g. "daily" | "weekdays" | "weekly:MON,WED,FRI". Instance generation
+  // and actual-pattern detection (vs. this rule) are later features built
+  // on top of TimeLog history - no extra schema needed for that yet.
+  recurrenceRule String?
+
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  timeLogs TimeLog[]
+
+  @@index([userId, scheduledDate])
+  @@index([goalId])
+}
+
+// Real logged time (start/stop), not manual estimates - this is the source
+// of truth for capacity and feasibility math.
+model TimeLog {
+  id     String @id @default(cuid())
+  taskId String
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  startedAt       DateTime
+  endedAt         DateTime?
+  durationSeconds Int?
+  note            String?
+
+  createdAt DateTime @default(now())
+
+  @@index([taskId])
+  @@index([userId, startedAt])
+}
+
+// Singleton row per user (single-user app, but kept relational for
+// future multi-user reuse and to mirror the User relation everywhere else).
+model UserStats {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  xp             Int       @default(0)
+  level          Int       @default(1)
+  streakCount    Int       @default(0)
+  longestStreak  Int       @default(0)
+  lastActiveDate DateTime?
+
+  updatedAt DateTime @updatedAt
+}
+
+// One row per triage session (voice or text). `actions` records what the
+// session decided to do to which goals (merge/pause/drop/keep/etc.) so the
+// UI can show a history of triage decisions.
+model ConversationSummary {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  rawInput String
+  summary  String
+  actions  Json
+  model    String
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}

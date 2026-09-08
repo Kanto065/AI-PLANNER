@@ -1,0 +1,64 @@
+# Deployment target: the shared VPS, where an existing project already owns
+# ports 80/443 via its own Caddy container. This file therefore has NO caddy
+# service of its own - "web" instead joins that project's docker network
+# (PROXY_NETWORK) so its Caddy can reverse_proxy to it by container name.
+# See DEPLOY.md for the one-time step of adding a site block to that Caddy's
+# config. For a dedicated VPS with no existing reverse proxy, use
+# docker-compose.standalone.yml instead, which bundles its own Caddy.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-planner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-planner}
+      POSTGRES_DB: ${POSTGRES_DB:-planner}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # Bound to localhost only: lets you `psql`/inspect from the host during
+    # dev, but is never reachable from outside the machine even without a
+    # firewall rule, since compose still doesn't publish it on 0.0.0.0.
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-planner}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kanto-web
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-planner}:${POSTGRES_PASSWORD:-planner}@postgres:5432/${POSTGRES_DB:-planner}?schema=public
+      AUTH_SECRET: ${AUTH_SECRET}
+      NEXTAUTH_URL: https://${SITE_ADDRESS:-localhost}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@kanto-planner.local}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+      - proxy
+
+volumes:
+  postgres_data:
+
+networks:
+  internal:
+  # The existing project's Caddy network. Its Caddyfile reverse_proxies to
+  # this container by name ("kanto-web:3000") once joined here.
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:-platform_internal}
