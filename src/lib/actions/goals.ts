@@ -5,6 +5,8 @@ import { prisma } from "@/lib/prisma";
 import { requireUserId } from "./require-user";
 import { recalculateFeasibility } from "@/lib/feasibility";
 import { GoalStatus, FeasibilitySource } from "@prisma/client";
+import { startOfDay } from "@/lib/date-utils";
+import { computePlanOccurrences, validatePlanInput, type PlanInput } from "@/lib/plan";
 
 function revalidateAll() {
   revalidatePath("/goals");
@@ -114,4 +116,127 @@ export async function submitOverride(goalId: string, note: string) {
   });
 
   revalidateAll();
+}
+
+const WEEKDAY_ABBR = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+
+export type PlanPreviewInput = {
+  weekdays: number[];
+  sessionMinutes: number;
+  preferredStartMinutes: number;
+  deadline: Date | null;
+  estimatedHours: number | null;
+};
+
+export type PlanPreview =
+  | { ok: true; occurrences: { dateIso: string; startIso: string; endIso: string }[]; sessionCount: number; totalHours: number; lastDateIso: string | null }
+  | { ok: false; errors: string[] };
+
+/** Read-only: computes what a plan WOULD create, no DB writes. Used for
+ * both the manual GoalFormModal preview step and the Triage AI's plan
+ * proposal card - the same computation createGoalWithPlan re-runs on
+ * confirm, so the previewed numbers are always what actually gets made. */
+export async function previewGoalPlan(input: PlanPreviewInput): Promise<PlanPreview> {
+  await requireUserId();
+
+  const planInput: PlanInput = {
+    startDate: startOfDay(new Date()),
+    weekdays: input.weekdays,
+    sessionMinutes: input.sessionMinutes,
+    preferredStartMinutes: input.preferredStartMinutes,
+    deadline: input.deadline,
+    estimatedHours: input.estimatedHours,
+  };
+
+  const errors = validatePlanInput(planInput);
+  if (errors.length) return { ok: false, errors };
+
+  const result = computePlanOccurrences(planInput);
+  return {
+    ok: true,
+    occurrences: result.occurrences.map((o) => ({
+      dateIso: o.date.toISOString(),
+      startIso: o.start.toISOString(),
+      endIso: o.end.toISOString(),
+    })),
+    sessionCount: result.sessionCount,
+    totalHours: result.totalHours,
+    lastDateIso: result.lastDate ? result.lastDate.toISOString() : null,
+  };
+}
+
+export type CreateGoalPlanInput = {
+  title: string;
+  description?: string;
+  category?: string;
+  estimatedHours?: number | null;
+  deadline?: Date | null;
+  weekdays: number[];
+  sessionMinutes: number;
+  preferredStartMinutes: number;
+};
+
+/** Creates the Goal plus every planned Task row in one transaction. Always
+ * re-validates and re-computes occurrences from the raw input server-side -
+ * never trusts a client-echoed preview. */
+export async function createGoalWithPlan(input: CreateGoalPlanInput): Promise<{ goalId: string; sessionCount: number }> {
+  const userId = await requireUserId();
+
+  const planInput: PlanInput = {
+    startDate: startOfDay(new Date()),
+    weekdays: input.weekdays,
+    sessionMinutes: input.sessionMinutes,
+    preferredStartMinutes: input.preferredStartMinutes,
+    deadline: input.deadline ?? null,
+    estimatedHours: input.estimatedHours ?? null,
+  };
+
+  const errors = validatePlanInput(planInput);
+  if (errors.length) throw new Error("INVALID_PLAN: " + errors.join("; "));
+
+  const { occurrences } = computePlanOccurrences(planInput);
+  if (occurrences.length === 0) {
+    throw new Error("INVALID_PLAN: no sessions fall within the given pattern/end condition");
+  }
+
+  const recurrenceRule = input.weekdays.length === 0 ? "daily" : `weekly:${input.weekdays.map((d) => WEEKDAY_ABBR[d]).join(",")}`;
+
+  const goalId = await prisma.$transaction(async (tx) => {
+    const goal = await tx.goal.create({
+      data: {
+        userId,
+        title: input.title,
+        description: input.description || null,
+        category: input.category || "Personal",
+        estimatedHours: input.estimatedHours ?? null,
+        deadline: input.deadline ?? null,
+        planWeekdays: input.weekdays,
+        planSessionMinutes: input.sessionMinutes,
+        planPreferredStartMinutes: input.preferredStartMinutes,
+      },
+    });
+
+    await tx.task.createMany({
+      data: occurrences.map((o) => ({
+        userId,
+        goalId: goal.id,
+        title: input.title,
+        scheduledDate: o.date,
+        scheduledStart: o.start,
+        scheduledEnd: o.end,
+        isRoutine: true,
+        recurrenceRule,
+        difficulty: 1,
+      })),
+    });
+
+    return goal.id;
+  });
+
+  // recalculateFeasibility runs its own top-level transaction - call it
+  // after this one commits rather than nesting it.
+  await recalculateFeasibility(goalId);
+  revalidateAll();
+
+  return { goalId, sessionCount: occurrences.length };
 }

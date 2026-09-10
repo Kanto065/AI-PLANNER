@@ -4,39 +4,50 @@ import { requireUserId } from "@/lib/actions/require-user";
 import { Blueprint } from "@/lib/design/Blueprint";
 import { TaskRow, type TaskRowData } from "@/lib/design/TaskRow";
 import { AddTaskButton } from "@/lib/design/AddTaskButton";
-import { addDays, dayLabel, dayOffsetToDate, formatHM, fmtElapsedSeconds } from "@/lib/date-utils";
+import { WeekStrip } from "@/lib/design/WeekStrip";
+import { CalendarPicker } from "@/lib/design/CalendarPicker";
+import { addDays, dayLabelForDate, formatHM, fmtElapsedSeconds, parseDateKey, startOfDay, startOfWeek, toDateKey } from "@/lib/date-utils";
 import { GoalStatus } from "@prisma/client";
 
 export default async function TodayPage({
   searchParams,
 }: {
-  searchParams: Promise<{ day?: string }>;
+  searchParams: Promise<{ date?: string }>;
 }) {
   const userId = await requireUserId();
-  const { day } = await searchParams;
-  const dayOffset = Number.isFinite(Number(day)) ? Number(day) : 0;
+  const { date } = await searchParams;
 
-  const targetDate = dayOffsetToDate(dayOffset);
-  const nextDate = addDays(targetDate, 1);
+  const today = startOfDay(new Date());
+  const selectedDate = date ? parseDateKey(date) : today;
+  const weekStart = startOfWeek(selectedDate);
+  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
-  const [tasks, openLog, weekLogs, activeGoals] = await Promise.all([
+  const [weekTasks, openLog, weekLogs, activeGoals] = await Promise.all([
     prisma.task.findMany({
-      where: { userId, scheduledDate: { gte: targetDate, lt: nextDate } },
+      where: { userId, scheduledDate: { gte: weekStart, lt: addDays(weekStart, 7) } },
       include: { goal: { select: { title: true } } },
       orderBy: { scheduledStart: "asc" },
     }),
     prisma.timeLog.findFirst({ where: { userId, endedAt: null } }),
     prisma.timeLog.findMany({
-      where: { userId, startedAt: { gte: addDays(dayOffsetToDate(0), -6) } },
+      where: { userId, startedAt: { gte: addDays(today, -6) } },
       select: { startedAt: true, durationSeconds: true },
     }),
     prisma.goal.findMany({
       where: { userId, status: GoalStatus.ACTIVE },
       orderBy: { createdAt: "desc" },
-      take: 5,
       select: { id: true, title: true, progressPercent: true },
     }),
   ]);
+
+  const countsByDate: Record<string, number> = {};
+  for (const t of weekTasks) {
+    const key = toDateKey(t.scheduledDate);
+    countsByDate[key] = (countsByDate[key] ?? 0) + 1;
+  }
+
+  const selectedKey = toDateKey(selectedDate);
+  const tasks = weekTasks.filter((t) => toDateKey(t.scheduledDate) === selectedKey);
 
   // This is a Server Component: it renders once per request on the server,
   // so a real timestamp here is correct, not a purity violation (the lint
@@ -56,9 +67,11 @@ export default async function TodayPage({
   }));
 
   const doneCount = tasks.filter((t) => t.status === "COMPLETED").length;
+  const goalOptions = activeGoals.map((g) => ({ id: g.id, title: g.title }));
 
   // "This week" bar chart: hours logged per day, last 7 days ending today.
-  const dayKeys = Array.from({ length: 7 }, (_, i) => addDays(dayOffsetToDate(0), -6 + i));
+  // Deliberately independent of whichever week is currently being browsed.
+  const dayKeys = Array.from({ length: 7 }, (_, i) => addDays(today, -6 + i));
   const hoursByDay = dayKeys.map((d) => {
     const next = addDays(d, 1);
     const seconds = weekLogs
@@ -70,22 +83,37 @@ export default async function TodayPage({
   const weekLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const weekTotal = hoursByDay.reduce((a, b) => a + b, 0);
 
-  const dateStr = targetDate.toISOString();
+  const dateStr = selectedDate.toISOString();
+  const prevWeekKey = toDateKey(addDays(selectedDate, -7));
+  const nextWeekKey = toDateKey(addDays(selectedDate, 7));
 
   return (
     <div className="grid gap-5 md:grid-cols-[1fr_280px]">
       <div>
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <Link href={`/today?day=${dayOffset - 1}`} className="btn btn-icon btn-secondary" style={{ padding: 6 }}>
+            <Link href={`/today?date=${prevWeekKey}`} className="btn btn-icon btn-secondary" style={{ padding: 6 }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M15 5l-7 7 7 7" /></svg>
             </Link>
-            <h2 className="m-0">{dayLabel(dayOffset, targetDate)}</h2>
-            <Link href={`/today?day=${dayOffset + 1}`} className="btn btn-icon btn-secondary" style={{ padding: 6 }}>
+            <h2 className="m-0">{dayLabelForDate(selectedDate)}</h2>
+            <Link href={`/today?date=${nextWeekKey}`} className="btn btn-icon btn-secondary" style={{ padding: 6 }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 5l7 7-7 7" /></svg>
             </Link>
+            <CalendarPicker selectedDate={selectedDate} today={today} />
           </div>
-          <span className="tag tag-outline">{doneCount}/{tasks.length} done</span>
+          <div className="flex items-center gap-2">
+            <span className="tag tag-outline">{doneCount}/{tasks.length} done</span>
+            <AddTaskButton
+              scheduledDate={dateStr}
+              goals={goalOptions}
+              className="btn btn-icon btn-secondary"
+              style={{ padding: 6 }}
+            />
+          </div>
+        </div>
+
+        <div className="mb-4">
+          <WeekStrip weekDays={weekDays} selectedDate={selectedDate} today={today} countsByDate={countsByDate} />
         </div>
 
         {tasksView.length > 0 ? (
@@ -102,7 +130,7 @@ export default async function TodayPage({
             </svg>
             <div style={{ fontWeight: 500, marginBottom: 4 }}>Nothing scheduled</div>
             <div className="text-muted mb-4" style={{ fontSize: 13 }}>No tasks planned for this day yet.</div>
-            <AddTaskButton scheduledDate={dateStr} />
+            <AddTaskButton scheduledDate={dateStr} goals={goalOptions} />
           </Blueprint>
         )}
       </div>
@@ -127,7 +155,7 @@ export default async function TodayPage({
             {activeGoals.length === 0 ? (
               <span className="text-muted" style={{ fontSize: 13 }}>No active goals yet.</span>
             ) : (
-              activeGoals.map((g) => (
+              activeGoals.slice(0, 5).map((g) => (
                 <Link key={g.id} href={`/goals?goal=${g.id}`} className="flex items-center justify-between gap-2" style={{ color: "inherit", textDecoration: "none" }}>
                   <span style={{ fontSize: 13 }}>{g.title}</span>
                   <span className="text-muted" style={{ fontSize: 12 }}>{Math.round(g.progressPercent)}%</span>

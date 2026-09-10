@@ -2,7 +2,33 @@ import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export type TriageMessage = { role: "user" | "assistant"; text: string };
-export type TriageProposal = { goalId: string; action: "pause" | "drop" | "merge" | "note"; text: string };
+
+export type GoalActionProposal = { kind: "goal_action"; goalId: string; action: "pause" | "drop" | "merge" | "note"; text: string };
+
+export type GoalPlanProposal = {
+  kind: "goal_plan";
+  title: string;
+  description?: string;
+  category?: string;
+  estimatedHours?: number | null;
+  deadline?: string | null; // ISO yyyy-mm-dd
+  weekdays: number[]; // 0-6, [] = every day
+  sessionMinutes: number;
+  preferredStartMinutes: number; // minutes since local midnight
+  text: string;
+};
+
+export type TaskCreateProposal = {
+  kind: "task_create";
+  title: string;
+  scheduledDate: string; // ISO yyyy-mm-dd
+  scheduledStartMinutes?: number | null;
+  durationMinutes?: number | null;
+  goalId?: string | null;
+  text: string;
+};
+
+export type TriageProposal = GoalActionProposal | GoalPlanProposal | TaskCreateProposal;
 export type TriageReply = { reply: string; proposal?: TriageProposal; provider?: "groq" | "gemini" };
 
 export type GoalContext = {
@@ -29,11 +55,22 @@ function systemPrompt(goals: GoalContext[]) {
 The user's current goals (real data, not invented):
 ${goalsBlock}
 
-If, and only if, the conversation clearly calls for changing a specific goal (pausing it, dropping it, merging it with another, or just leaving a note on it), include a "proposal" referencing its exact id from the list above. Never invent a goalId that isn't listed. Never apply a change yourself - only propose it; the user must explicitly confirm.
+You can propose exactly one of three kinds of change per turn. Always include "kind" in the proposal.
 
-Respond with ONLY a JSON object, no other text, in exactly this shape:
-{"reply": "your response text", "proposal": {"goalId": "...", "action": "pause|drop|merge|note", "text": "one sentence describing the proposed change"}}
-Omit the "proposal" key entirely if no change is warranted.`;
+1. Changing an EXISTING goal (pausing it, dropping it, merging it with another, or leaving a note): reference its exact id from the list above, never invent one.
+{"reply": "...", "proposal": {"kind": "goal_action", "goalId": "...", "action": "pause|drop|merge|note", "text": "one sentence describing the proposed change"}}
+
+2. Creating a brand-new goal with a recurring commitment plan, when the user describes a new goal they want to start tracking (not a change to an existing one):
+{"reply": "...", "proposal": {"kind": "goal_plan", "title": "...", "description": "...", "category": "...", "estimatedHours": <number or null>, "deadline": "<yyyy-mm-dd or null>", "weekdays": [0-6 ints, Sun=0; empty array means every day], "sessionMinutes": <int>, "preferredStartMinutes": <int, minutes since midnight>, "text": "one sentence summary"}}
+
+3. Creating a single one-off task, optionally linked to one of the goals listed above by id:
+{"reply": "...", "proposal": {"kind": "task_create", "title": "...", "scheduledDate": "<yyyy-mm-dd>", "scheduledStartMinutes": <int or null>, "durationMinutes": <int or null>, "goalId": "<existing id or null>", "text": "one sentence summary"}}
+
+Required fields before you may emit a "goal_plan" proposal: title, which days (or every day), session length, a preferred time, AND a deadline and/or total estimated hours - a recurring plan is never allowed to have neither. Required fields before you may emit a "task_create" proposal: title and a date.
+
+If the user is clearly asking to create a new goal or task but ANY required field above is missing or ambiguous, do NOT emit a proposal this turn. Instead, in "reply", ask a short clarifying question AND suggest a specific, reasonable default for each missing piece (e.g. "I'd suggest 1-hour sessions starting at 6pm - want me to use that, or something else?") so the user can just say yes. Only emit the proposal once you have every required field, either from what the user said or from them accepting your suggested defaults.
+
+Never apply any change yourself - only propose it; the user must explicitly confirm. Omit the "proposal" key entirely when you're just asking a clarifying question or there's nothing to propose. Respond with ONLY a JSON object, no other text, in exactly one of the shapes above.`;
 }
 
 function parseReply(raw: string): TriageReply {

@@ -1,30 +1,117 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { Blueprint } from "./Blueprint";
 import { useSpeechRecognition } from "./useSpeechRecognition";
 import { sendTriageMessage, respondToProposal, type StoredMessage } from "@/lib/actions/triage";
+import { previewGoalPlan, type PlanPreview } from "@/lib/actions/goals";
+import { formatHM } from "@/lib/date-utils";
 
 export type SessionSummary = { id: string; date: string; summary: string; messages: StoredMessage[] };
 
-function ProposalCard({ msg, index, onRespond, pending }: { msg: StoredMessage; index: number; onRespond: (i: number, d: "confirm" | "reject") => void; pending: boolean }) {
-  if (!msg.proposal) return null;
+function GoalActionCard({ msg, index, onRespond, pending }: { msg: Extract<StoredMessage["proposal"], { kind: "goal_action" }>; index: number; onRespond: (i: number, d: "confirm" | "reject") => void; pending: boolean }) {
   return (
     <Blueprint className="max-w-[88%] self-start p-3.5" style={{ background: "var(--color-accent-100)" }}>
       <div className="mb-1.5" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--color-accent-800)" }}>
         Proposed change
       </div>
-      <div className="mb-2.5" style={{ fontSize: 14 }}>{msg.proposal.text}</div>
-      {msg.proposal.status === "pending" && (
-        <div className="flex gap-2">
-          <button className="btn btn-primary" disabled={pending} onClick={() => onRespond(index, "confirm")} style={{ fontSize: 12, padding: "6px 12px" }} type="button">Confirm</button>
-          <button className="btn btn-secondary" disabled={pending} onClick={() => onRespond(index, "reject")} style={{ fontSize: 12, padding: "6px 12px" }} type="button">Reject</button>
-        </div>
-      )}
-      {msg.proposal.status === "confirmed" && <span className="tag tag-outline">Applied</span>}
-      {msg.proposal.status === "rejected" && <span className="tag tag-neutral">Dismissed</span>}
+      <div className="mb-2.5" style={{ fontSize: 14 }}>{msg.text}</div>
+      <ProposalActions status={msg.status} index={index} onRespond={onRespond} pending={pending} />
     </Blueprint>
   );
+}
+
+function PlanProposalCard({ msg, index, onRespond, pending }: { msg: Extract<StoredMessage["proposal"], { kind: "goal_plan" }>; index: number; onRespond: (i: number, d: "confirm" | "reject") => void; pending: boolean }) {
+  const [preview, setPreview] = useState<PlanPreview | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    previewGoalPlan({
+      weekdays: msg.weekdays,
+      sessionMinutes: msg.sessionMinutes,
+      preferredStartMinutes: msg.preferredStartMinutes,
+      deadline: msg.deadline ? new Date(msg.deadline + "T00:00:00") : null,
+      estimatedHours: msg.estimatedHours ?? null,
+    }).then((result) => { if (!cancelled) setPreview(result); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const frequencyLabel = msg.weekdays.length === 0 ? "Every day" : msg.weekdays.map((d) => dayNames[d]).join(", ");
+
+  return (
+    <Blueprint className="max-w-[88%] self-start p-3.5" style={{ background: "var(--color-accent-100)" }}>
+      <div className="mb-1.5" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--color-accent-800)" }}>
+        Proposed new goal
+      </div>
+      <div className="mb-1" style={{ fontWeight: 500, fontSize: 15 }}>{msg.title}</div>
+      {msg.description ? <div className="text-muted mb-2" style={{ fontSize: 13 }}>{msg.description}</div> : null}
+
+      {!preview ? (
+        <div className="text-muted mb-2.5" style={{ fontSize: 13 }}>Computing schedule…</div>
+      ) : preview.ok ? (
+        <div className="mb-2.5 grid grid-cols-2 gap-2.5">
+          <div>
+            <div className="text-muted" style={{ fontSize: 11 }}>Sessions</div>
+            <div style={{ fontSize: 14, fontWeight: 500 }}>{preview.sessionCount} ({preview.totalHours.toFixed(1)}h)</div>
+          </div>
+          <div>
+            <div className="text-muted" style={{ fontSize: 11 }}>Days</div>
+            <div style={{ fontSize: 14, fontWeight: 500 }}>{frequencyLabel}</div>
+          </div>
+          <div>
+            <div className="text-muted" style={{ fontSize: 11 }}>Deadline</div>
+            <div style={{ fontSize: 14, fontWeight: 500 }}>{msg.deadline ?? "No deadline"}</div>
+          </div>
+          <div>
+            <div className="text-muted" style={{ fontSize: 11 }}>Through</div>
+            <div style={{ fontSize: 14, fontWeight: 500 }}>
+              {preview.lastDateIso ? new Date(preview.lastDateIso).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="mb-2.5" style={{ fontSize: 13, color: "var(--color-accent-800)" }}>{preview.errors.join(" ")}</div>
+      )}
+
+      <ProposalActions status={msg.status} index={index} onRespond={onRespond} pending={pending} disabled={!preview?.ok} />
+    </Blueprint>
+  );
+}
+
+function TaskProposalCard({ msg, index, onRespond, pending }: { msg: Extract<StoredMessage["proposal"], { kind: "task_create" }>; index: number; onRespond: (i: number, d: "confirm" | "reject") => void; pending: boolean }) {
+  return (
+    <Blueprint className="max-w-[88%] self-start p-3.5" style={{ background: "var(--color-accent-100)" }}>
+      <div className="mb-1.5" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--color-accent-800)" }}>
+        Proposed task
+      </div>
+      <div className="mb-1" style={{ fontWeight: 500, fontSize: 15 }}>{msg.title}</div>
+      <div className="text-muted mb-2.5" style={{ fontSize: 13 }}>
+        {msg.scheduledDate}
+        {msg.scheduledStartMinutes != null ? ` · ${formatHM(new Date(2000, 0, 1, Math.floor(msg.scheduledStartMinutes / 60), msg.scheduledStartMinutes % 60))}` : ""}
+      </div>
+      <ProposalActions status={msg.status} index={index} onRespond={onRespond} pending={pending} />
+    </Blueprint>
+  );
+}
+
+function ProposalActions({ status, index, onRespond, pending, disabled }: { status: "pending" | "confirmed" | "rejected"; index: number; onRespond: (i: number, d: "confirm" | "reject") => void; pending: boolean; disabled?: boolean }) {
+  if (status === "confirmed") return <span className="tag tag-outline">Applied</span>;
+  if (status === "rejected") return <span className="tag tag-neutral">Dismissed</span>;
+  return (
+    <div className="flex gap-2">
+      <button className="btn btn-primary" disabled={pending || disabled} onClick={() => onRespond(index, "confirm")} style={{ fontSize: 12, padding: "6px 12px" }} type="button">Confirm</button>
+      <button className="btn btn-secondary" disabled={pending} onClick={() => onRespond(index, "reject")} style={{ fontSize: 12, padding: "6px 12px" }} type="button">Reject</button>
+    </div>
+  );
+}
+
+function ProposalCard({ msg, index, onRespond, pending }: { msg: StoredMessage; index: number; onRespond: (i: number, d: "confirm" | "reject") => void; pending: boolean }) {
+  if (!msg.proposal) return null;
+  if (msg.proposal.kind === "goal_plan") return <PlanProposalCard msg={msg.proposal} index={index} onRespond={onRespond} pending={pending} />;
+  if (msg.proposal.kind === "task_create") return <TaskProposalCard msg={msg.proposal} index={index} onRespond={onRespond} pending={pending} />;
+  return <GoalActionCard msg={msg.proposal} index={index} onRespond={onRespond} pending={pending} />;
 }
 
 export function TriageChat({ initialSessionId, initialMessages, sessions }: { initialSessionId: string | null; initialMessages: StoredMessage[]; sessions: SessionSummary[] }) {

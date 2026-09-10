@@ -1,28 +1,22 @@
 "use client";
 
-import { useTransition } from "react";
-import { createTask } from "@/lib/actions/tasks";
+import { useState } from "react";
+import { TaskFormModal, type TaskFormGoalOption } from "./TaskFormModal";
 
-export function AddTaskButton({ scheduledDate }: { scheduledDate: string }) {
-  const [pending, startTransition] = useTransition();
+export function AddTaskButton({ scheduledDate, goals, className, style }: {
+  scheduledDate: string;
+  goals: TaskFormGoalOption[];
+  className?: string;
+  style?: React.CSSProperties;
+}) {
+  const [open, setOpen] = useState(false);
 
   return (
-    <button
-      className="btn btn-primary"
-      style={{ margin: "0 auto" }}
-      disabled={pending}
-      type="button"
-      onClick={() =>
-        startTransition(async () => {
-          const date = new Date(scheduledDate);
-          const start = new Date();
-          start.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
-          const end = new Date(start.getTime() + 30 * 60_000);
-          await createTask({ title: "New task", scheduledDate: date, scheduledStart: start, scheduledEnd: end });
-        })
-      }
-    >
-      Add a task
-    </button>
+    <>
+      <button className={className ?? "btn btn-primary"} style={style ?? { margin: "0 auto" }} onClick={() => setOpen(true)} type="button">
+        Add a task
+      </button>
+      {open && <TaskFormModal scheduledDate={new Date(scheduledDate)} goals={goals} onClose={() => setOpen(false)} />}
+    </>
   );
 }

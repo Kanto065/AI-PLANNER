@@ -71,6 +71,17 @@ model Goal {
   progressPercent Float      @default(0)
   status          GoalStatus @default(ACTIVE)
 
+  // Recurring commitment pattern (optional). Set when this goal was
+  // created via the plan generator (src/lib/plan.ts) - describes the
+  // recurrence used to materialize its Task rows up front. Purely
+  // descriptive after creation: nothing re-expands these at read time,
+  // every occurrence is a real Task row.
+  planWeekdays              Int[] @default([])
+  // 0=Sun..6=Sat, matching Date#getDay(). Empty array = every day.
+  planSessionMinutes        Int?
+  planPreferredStartMinutes Int?
+  // Minutes since local midnight (9:30am = 570).
+
   // Current feasibility snapshot (recalculated from TimeLog pace vs.
   // estimatedHours/deadline). `feasibilityReason` is a human-readable
   // explanation, not just a number, per the "tell me honestly what's
